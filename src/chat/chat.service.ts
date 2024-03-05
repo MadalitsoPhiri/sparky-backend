@@ -2044,13 +2044,15 @@ export class ChatService {
         .to((conversation.workspace as WorkSpaces).id)
         .emit('conversation_update', { data: conversation });
       conversation.assigned_to.forEach(async (item) => {
-        await this.email_service.send_email({
-          to: item.email,
-          subject: 'Conversation status changed',
-          // html: html_to_send,
-          text: `Conversation ${conversation._id} status changed to ${data.data.status}.`,
-          namespace: 'SparkHub',
-        });
+        if (!(item?.type === USERTYPE.BOT)) {
+          await this.email_service.send_email({
+            to: item.email,
+            subject: 'Conversation status changed',
+            // html: html_to_send,
+            text: `Conversation ${conversation._id} status changed to ${data.data.status}.`,
+            namespace: 'SparkHub',
+          });
+        }
       });
       return { data: conversation, status: 200, error: null };
     } catch (e: any) {
