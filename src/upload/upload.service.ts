@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Storage } from '@google-cloud/storage';
 import { ConfigService } from '@nestjs/config';
 import { UploadDto } from './entities/dtos/upload.dto';
+import { DeleteDto } from './entities/dtos/delete.dto';
 import { SocketType } from 'src/auth/entities/types';
 import { USERTYPE } from 'src/auth/entities';
 import { Stream } from 'stream';
@@ -72,6 +73,33 @@ export class UploadService {
         })
         .on('error', (e) => {
           reject('Unable to upload image, something went wrong');
+        });
+    });
+  }
+
+  async handleDeleteFile(payload: DeleteDto) {
+    return new Promise((resolve, reject) => {
+      const storage = new Storage({
+        keyFilename: './service-key.json',
+      });
+      const bucket = storage.bucket(this.config.get('GCLOUD_STORAGE_BUCKET'));
+      console.log('data:', payload);
+      const blob = bucket.file(payload.file_name);
+      blob
+        .delete()
+        .then(() => {
+          resolve({
+            error: false,
+            message: 'Succesfully deleted file',
+            status: 200,
+          });
+        })
+        .catch((err) => {
+          reject({
+            error: true,
+            message: 'Failed to delete file',
+            status: 500,
+          });
         });
     });
   }
