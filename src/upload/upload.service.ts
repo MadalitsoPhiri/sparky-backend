@@ -83,7 +83,6 @@ export class UploadService {
         keyFilename: './service-key.json',
       });
       const bucket = storage.bucket(this.config.get('GCLOUD_STORAGE_BUCKET'));
-      console.log('data:', payload);
       const blob = bucket.file(payload.file_name);
       blob
         .delete()
