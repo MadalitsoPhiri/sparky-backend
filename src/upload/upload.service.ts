@@ -9,7 +9,7 @@ import { Stream } from 'stream';
 
 @Injectable()
 export class UploadService {
-  constructor(private config: ConfigService) {}
+  constructor(private config: ConfigService) { }
   async handleBufferUpload(file: Uint8Array, file_name: string) {
     return new Promise<string>((resolve, reject) => {
       const storage = new Storage({
@@ -37,10 +37,9 @@ export class UploadService {
     try {
       const response = await this.handleBufferUpload(
         payload.file,
-        `${
-          client.user.type === USERTYPE.AGENT
-            ? client.user.sub
-            : client.user.user_id
+        `${client.user.type === USERTYPE.AGENT
+          ? client.user.sub
+          : client.user.user_id
         }-${payload.file_name}`,
       );
       return {
@@ -84,22 +83,33 @@ export class UploadService {
       });
       const bucket = storage.bucket(this.config.get('GCLOUD_STORAGE_BUCKET'));
       const blob = bucket.file(payload.file_name);
-      blob
-        .delete()
-        .then(() => {
-          resolve({
-            error: false,
-            message: 'Succesfully deleted file',
-            status: 200,
-          });
-        })
-        .catch((err) => {
+
+      blob.exists().then(async ([exists]) => {
+        if (exists) {
+          blob
+            .delete()
+            .then(() => {
+              resolve({
+                error: false,
+                message: 'Succesfully deleted file',
+                status: 200,
+              });
+            })
+            .catch((err) => {
+              reject({
+                error: true,
+                message: `Failed to delete file ${err.message}`,
+                status: 500,
+              });
+            });
+        } else {
           reject({
             error: true,
-            message: 'Failed to delete file',
+            message: `No such file: ${payload.file_name}`,
             status: 500,
           });
-        });
+        }
+      });
     });
   }
 }
