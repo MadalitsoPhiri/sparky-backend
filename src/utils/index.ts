@@ -109,3 +109,7 @@ export const convertThreadToConversation = async (thread: any) => {
     return new Conversations({ channel: CONVERSATION_CHANNEL.EMAIL });
   }
 };
+
+export const getGoogleDocIdFromUrl = (url: string) => {
+  return url.match(/[-\w]{25,}/)?.[0];
+}
