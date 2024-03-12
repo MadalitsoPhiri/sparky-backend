@@ -12,6 +12,9 @@ export class CompanyContext extends Document {
 
   @Prop({ type: String, default: () => null })
   website_url: string;
+
+  @Prop({ type: String, default: () => null })
+  google_docs_url: string;
 }
 
 export const CompanyContextSchema =
