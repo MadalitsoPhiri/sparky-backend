@@ -7,7 +7,7 @@ import { CompanyContextRepository } from './repositories/company_context.reposit
 import { BasicSparkGPTQuestion, SparkGPTQuestion } from './entities/schema';
 import { CreateCompletionDto } from './entities/dtos/create_completion.dto';
 import { BASIC_COMPANY_INFORMATION_QUESTION } from './entities/constants';
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { WorkspaceRepository } from 'src/auth/repositories';
 import { ScraperDto } from './entities/dtos/scrapper_dto';
 import { RedisService } from 'src/redis/redis.service';
@@ -282,7 +282,7 @@ export class SparkGPTService {
 
         resolve({ context });
       } catch (err) {
-        console.log('errorrrr:', err);
+        Logger.error('error:', err);
 
         reject({
           error: true,

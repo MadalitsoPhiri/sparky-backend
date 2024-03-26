@@ -59,7 +59,6 @@ export class SparkGPTGateWay {
     @ConnectedSocket() client: SocketType,
     @MessageBody() data: EventDto<WebSiteImportDto>,
   ) {
-    console.log(' data', data);
     return await this.sparkGPTService.import_google_docs(
       client,
       data.payload.url,
