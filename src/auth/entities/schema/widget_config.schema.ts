@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import mongoose, { Document } from 'mongoose';
 import { AVAILABILITY, AvailabilityDay } from '../types/availability';
 import { WorkSpaces } from './workspaces.schema';
+import { EMAIL_REQUIRED_STATUS } from 'src/chat/entities/constants';
 
 @Schema({ _id: false })
 class Colors extends Document {
@@ -85,7 +86,7 @@ class OfficeHour extends Document {
 export const OfficeHourSchema = SchemaFactory.createForClass(OfficeHour);
 
 @Schema({ _id: false })
-class Availability extends Document {
+export class Availability extends Document {
   @Prop({
     type: [OfficeHourSchema],
     default: [],
@@ -130,5 +131,14 @@ export class WidgetConfig extends Document {
   allowed_origins: string[];
   @Prop({ type: AvailabilitySchema, default: () => ({}) })
   availability: Availability;
+  @Prop({
+    enum: [
+      EMAIL_REQUIRED_STATUS.OFFICE_HOURS,
+      EMAIL_REQUIRED_STATUS.ALWAYS,
+      EMAIL_REQUIRED_STATUS.NEVER,
+    ],
+    default: EMAIL_REQUIRED_STATUS.NEVER,
+  })
+  email_required: string;
 }
 export const WidgetConfigSchema = SchemaFactory.createForClass(WidgetConfig);
