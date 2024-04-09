@@ -136,8 +136,6 @@ export const convertTime12to24 = (time12h) => {
 }
 
 export const getIsWorking = (email_required: string, availability: Availability) => {
-  Logger.log('email_req:', email_required);
-  Logger.log('availability:', availability);
   
   if (email_required != EMAIL_REQUIRED_STATUS.OFFICE_HOURS) {
     return;
@@ -189,8 +187,6 @@ export const getIsWorking = (email_required: string, availability: Availability)
     }));
   }
 
-  Logger.log('Days:', work_hours.map(d => d.openDay));
-
   const localTimeZone = 'America/Toronto';
 
   const now = new Date();
@@ -205,22 +201,16 @@ export const getIsWorking = (email_required: string, availability: Availability)
     hour: '2-digit',
     minute: '2-digit'
   }).format(now);
-  
-  Logger.log('Day:', currentTime);
 
   const workingTimes = work_hours.filter(times => times.openDay?.toLocaleLowerCase() === currentDayInWeek?.toLocaleLowerCase());
 
-  Logger.log('Day:', workingTimes.map(d => d.openDay));
+  const currentTimeNow = new Date(`1 Jan 2024 ${currentTime}`).getTime();
 
   return workingTimes.some((time) => {
-    const openTime = (time.openTime);
-    const closeTime = (time.closeTime);
+    const openTimeNow = new Date(`1 Jan 2024 ${time.openTime}`).getTime();
+    const closeTimeNow = new Date(`1 Jan 2024 ${time.closeTime}`).getTime();
 
-    Logger.log('Open Time:', openTime);    
-    Logger.log('Close Time:', closeTime);    
-    Logger.log('Compare Time:', currentTime);    
-
-    if (currentTime >= time.openTime && currentTime <= time.closeTime) return true;
+    if (currentTimeNow >= openTimeNow && currentTimeNow <= closeTimeNow) return true;
 
     return false;
   });
