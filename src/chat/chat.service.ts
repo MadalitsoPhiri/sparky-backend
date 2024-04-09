@@ -1514,7 +1514,10 @@ export class ChatService {
 
         const duringWorkingHours = getIsWorking(widget_config.email_required, widget_config.availability);
 
-        if (!sender.email && (widget_config.email_required == EMAIL_REQUIRED_STATUS.ALWAYS || duringWorkingHours)) {
+        Logger.log('email:', sender?.email);
+        Logger.log('duringWorkingHours:', duringWorkingHours);
+
+        if (!sender.email && (widget_config.email_required == EMAIL_REQUIRED_STATUS.ALWAYS || !duringWorkingHours)) {
           Logger.log('Send prompt');
 
           const sparky =
@@ -1524,6 +1527,20 @@ export class ChatService {
             (await this.authService.create_spark_gpt_agent(
               (final.conversation as Conversations)?.workspace as WorkSpaces,
             ));
+
+          let after_hours_message;
+
+          if (!duringWorkingHours) {
+            after_hours_message = await this.messages_repository.create({
+              sender: sparky._id,
+              conversation: final.conversation,
+              content: {
+                text: 'The current time is outside our working hours.',
+              },
+              type: MESSAGE_TYPE.TEXT,
+              workspace: (final.conversation as Conversations)?.workspace
+            });
+          }
 
           const cta_pre_message = await this.messages_repository.create({
             sender: sparky._id,
@@ -1559,6 +1576,7 @@ export class ChatService {
             .to((conversation.workspace as WorkSpaces).id)
             .emit('new_message', { data: prompt_message });
 
+          after_hours_message && client.emit('new_message', { data: after_hours_message });
           client.emit('new_message', { data: cta_pre_message });
           client.emit('new_message', { data: prompt_message });
         } else {

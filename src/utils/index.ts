@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import * as https from 'https';
 import axios from 'axios';
 import { convert } from 'html-to-text';
@@ -7,6 +7,7 @@ import { Conversations, Messages } from 'src/chat/entities/schema';
 import { channel } from 'diagnostics_channel';
 import { CONVERSATION_CHANNEL, EMAIL_REQUIRED_STATUS } from 'src/chat/entities/constants';
 import { Availability } from 'src/auth/entities';
+import { AvailabilityDay } from 'src/auth/entities/types/availability';
 
 export const getHTMLFromWebsite = async (dto: ScraperDto) => {
   const pattern = /^((http|https|ftp):\/\/)/;
@@ -118,32 +119,109 @@ export const convertThreadToConversation = async (thread: any) => {
   }
 };
 
+export const convertTime12to24 = (time12h) => {
+  const [time, modifier] = time12h.split(' ');
+
+  let [hours, minutes] = time.split(':');
+
+  if (hours === '12') {
+    hours = '00';
+  }
+
+  if (modifier === 'PM') {
+    hours = parseInt(hours, 10) + 12;
+  }
+
+  return `${hours}:${minutes}`;
+}
+
 export const getIsWorking = (email_required: string, availability: Availability) => {
-  // FIXME: remove this code and let the rest run
-  return false;
+  Logger.log('email_req:', email_required);
+  Logger.log('availability:', availability);
   
   if (email_required != EMAIL_REQUIRED_STATUS.OFFICE_HOURS) {
     return;
   }
 
-  let available = false;
+  const office_hours = availability.officeHours[0];
+  const is_everyday = office_hours.openDay === AvailabilityDay.EVERYDAY;
+  const is_weekdays = office_hours.openDay === AvailabilityDay.WEEKDAYS;
+  const is_weekends = office_hours.openDay === AvailabilityDay.WEEKENDS;
+
+  const hours = {
+    openTime: office_hours.openTime,
+    closeTime: office_hours.closeTime,
+  };
+
+  let work_hours = [];
+
+  if (is_everyday) {
+    work_hours = [
+      AvailabilityDay.MONDAY,
+      AvailabilityDay.TUESDAY,
+      AvailabilityDay.WEDNESDAY,
+      AvailabilityDay.THURSDAY,
+      AvailabilityDay.FRIDAY,
+      AvailabilityDay.SATURDAY,
+      AvailabilityDay.SUNDAY,
+    ].map(day => ({
+      openDay: day,
+      ...hours,
+    }));
+  } else if (is_weekdays) {
+    work_hours = [
+      AvailabilityDay.MONDAY,
+      AvailabilityDay.TUESDAY,
+      AvailabilityDay.WEDNESDAY,
+      AvailabilityDay.THURSDAY,
+      AvailabilityDay.FRIDAY,
+    ].map(day => ({
+      openDay: day,
+      ...hours,
+    }));
+  } else if (is_weekends) {
+    work_hours = [
+      AvailabilityDay.SATURDAY,
+      AvailabilityDay.SUNDAY,
+    ].map(day => ({
+      openDay: day,
+      ...hours,
+    }));
+  }
+
+  Logger.log('Days:', work_hours.map(d => d.openDay));
+
+  const localTimeZone = 'America/Toronto';
 
   const now = new Date();
 
   const currentDayInWeek = now.toLocaleString("en-US", {
-    // timeZone: localTimeZone,
+    timeZone: localTimeZone,
     weekday: 'long'
   });
   const currentTime = new Intl.DateTimeFormat([], {
-    // timeZone: localTimeZone,
+    timeZone: localTimeZone,
     hour12: false,
     hour: '2-digit',
     minute: '2-digit'
   }).format(now);
+  
+  Logger.log('Day:', currentTime);
 
-  const workingTimes = availability.officeHours.filter(times => times.openDay?.toLocaleLowerCase() === currentDayInWeek?.toLocaleLowerCase());
+  const workingTimes = work_hours.filter(times => times.openDay?.toLocaleLowerCase() === currentDayInWeek?.toLocaleLowerCase());
+
+  Logger.log('Day:', workingTimes.map(d => d.openDay));
 
   return workingTimes.some((time) => {
+    const openTime = (time.openTime);
+    const closeTime = (time.closeTime);
+
+    Logger.log('Open Time:', openTime);    
+    Logger.log('Close Time:', closeTime);    
+    Logger.log('Compare Time:', currentTime);    
+
     if (currentTime >= time.openTime && currentTime <= time.closeTime) return true;
+
+    return false;
   });
 }
