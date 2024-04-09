@@ -33,7 +33,9 @@ import {
   CONVERSATION_CHANNEL,
   CONVERSATION_STATUS,
   CONVERSATION_TYPE,
+  EMAIL_REQUIRED_STATUS,
   MESSAGE_TYPE,
+  PROMPT_TYPE,
 } from './entities/constants';
 import { ContactConversationsDto } from './entities/dtos/contact_conversations.dto';
 import { UpdateConversationStatusDto } from './entities/dtos/conversation_status.dto';
@@ -64,6 +66,8 @@ import { ConversationsRepository } from './repositories/conversation.repository'
 import { FaqsRespository } from './repositories/faq.respository';
 import { MessagesRepository } from './repositories/message.repository';
 import { NotesRepository } from './repositories/notes.repository';
+import { getIsWorking } from 'src/utils';
+import { UpdateUserEmailDto } from './entities/dtos/update_user_email.dto';
 
 export type UserInfo = User & { is_online: boolean; web_sessions: number };
 
@@ -90,7 +94,7 @@ export class ChatService {
     @InjectModel(Messages.name) private messageModel: Model<Messages>,
     @InjectModel(Users.name) private userModel: Model<Users>,
     private sparkGPTService: SparkGPTService,
-  ) {}
+  ) { }
 
   private async introduce_spark_gpt(
     server: Server,
@@ -287,6 +291,121 @@ export class ChatService {
     } catch (e) {
       return { data: null, error: { msg: e.message, status: 500 } };
     }
+  }
+
+  async handle_update_lead_email(
+    client: SocketType,
+    data: EventDto<UpdateUserEmailDto>,
+  ) {
+    let response;
+
+    try {
+
+      Logger.log('user:', client.user);
+
+      let updated_user_info, updated_message;
+
+      // Check if the email exists
+      const existing_user = await this.user_repository.get_one(
+        {
+          email: data.data.user.email,
+          'workspace._id': data.data.workspace_id,
+          type: USERTYPE.CLIENT,
+        },
+      );
+
+      // If the user exists
+      if (existing_user) {
+        // Take all conversations and merge into older account
+        const old_conversations = await this.conversations_repository.update_many(
+          {
+            lead: new mongoose.Types.ObjectId(client.user.user_id),
+          },
+          {
+            lead: existing_user._id,
+            workspace: existing_user.workspace,
+          },
+        );
+
+        Logger.log('old conv:', Object.keys(old_conversations));
+
+        // Delete new account
+        const deleted_response = await this.user_repository.delete_by_id(client.user.user_id);
+        Logger.log('delete response:', Object.keys(deleted_response));
+
+        // Updates auth layer with new user info
+        client.user.user_id = existing_user.user_id;
+        client.user.email = data.data.user.email;
+
+        Logger.log('client.user:', client.user);
+
+        updated_user_info = existing_user;
+
+        Logger.log('user info updated:', Object.keys(updated_user_info));
+        Logger.log('message updated:', Object.keys(updated_message));
+
+      } else {
+        Logger.log('None existing user update');
+
+        updated_user_info = await this.user_repository.update_one_by_id(
+          client.user.user_id,
+          data.data.user,
+        );
+
+        Logger.log('User:', updated_user_info);
+      }
+
+      updated_message = await this.messages_repository.update_one_by_id(data.data.message_id,
+        {
+          $set: {
+            content: {
+              text: '',
+              payload: {
+                prompt_type: PROMPT_TYPE.EMAIL,
+                email: data.data.user.email,
+              },
+            },
+          },
+        });
+
+      const sparky =
+        (await this.user_repository.get_by_id(
+          ((updated_message.conversation as Conversations)?.workspace as WorkSpaces)?.spark_gpt_agent?._id,
+        )) ??
+        (await this.authService.create_spark_gpt_agent(
+          (updated_message.conversation as Conversations)?.workspace as WorkSpaces,
+        ));
+
+      const cta_pre_message = await this.messages_repository.create({
+        sender: sparky._id,
+        conversation: updated_message.conversation,
+        content: {
+          text: 'Thank you for submitting your email, an agent will reply shortly',
+        },
+        type: MESSAGE_TYPE.TEXT,
+        workspace: (updated_message.conversation as Conversations)?.workspace
+      });
+
+      client.emit('new_message', {
+        data: cta_pre_message,
+      })
+
+      Logger.log('updated email prompt:', updated_message);
+
+      response = {
+        error: null,
+        data: {
+          message: updated_message,
+          user: updated_user_info,
+        },
+        status: 200,
+      }
+    } catch (e) {
+      Logger.error('errrrr:', e);
+      response = { data: null, error: { msg: e.message, status: 500 } };
+    }
+
+    return response
   }
 
   async handle_get_user_info(
@@ -816,6 +935,7 @@ export class ChatService {
               allowed_origins: data.data.allowed_origins,
               chat_suggestions: data.data.chat_suggestions,
               availability: data.data.availability,
+              email_required: data.data.email_required,
             },
           );
 
@@ -839,174 +959,178 @@ export class ChatService {
   }
 
   async get_conversations(client: SocketType, data: GetConversationDto) {
-    const skip = (data.page - 1) * data.size;
+    try {
+      const skip = (data.page - 1) * data.size;
 
-    if (client && client.user.type == USERTYPE.CLIENT) {
-      // get conversations for widget here
+      if (client && client.user.type == USERTYPE.CLIENT) {
+        // get conversations for widget here
 
-      const count = await this.conversations_repository.get_count({
-        lead: client.user.user_id,
-        status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
-      });
-      const result = await this.conversations_repository.get_all(
-        {
+        console.log('client user:', client.user.user_id);
+
+        const count = await this.conversations_repository.get_count({
           lead: client.user.user_id,
           status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
-        },
-        {
-          skip: skip ? skip : 0,
-          limit: data.size,
-        },
-      );
-
-      return {
-        data: {
-          conversations: result,
-          error: null,
-          page: data.page ? data.page : 1,
-          count,
-        },
-      };
-    } else if (client && client.user.type == USERTYPE.AGENT) {
-      // get conversations for dashboard here
-      //find agent root account
-      const agent = await this.userModel.findById(client.user.sub).exec();
-
-      if (agent) {
-        // agent found
-        // find active workspace for agent
-        const session = await this.redisService.get_session(
-          agent.id,
-          client.user.session_id,
+        });
+        const result = await this.conversations_repository.get_all(
+          {
+            lead: client.user.user_id,
+            status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
+          },
+          {
+            skip: skip ? skip : 0,
+            limit: data.size,
+          },
         );
 
-        if (session) {
-          const countFilter: { [key: string]: any } = {
-            workspace: new mongoose.Types.ObjectId(session.active_workspace),
-            status: data.status ?? CONVERSATION_STATUS.OPEN,
-            channel: data.channel ?? CONVERSATION_CHANNEL.CHAT,
-          };
+        return {
+          data: {
+            conversations: result,
+            error: null,
+            page: data.page ? data.page : 1,
+            count,
+          },
+        };
+      } else if (client && client.user.type == USERTYPE.AGENT) {
+        // get conversations for dashboard here
+        //find agent root account
+        const agent = await this.userModel.findById(client.user.sub).exec();
 
-          if (data.contactId) {
-            countFilter.lead = new mongoose.Types.ObjectId(data.contactId);
-          }
-
-          const count = await this.conversations_repository.get_count(
-            countFilter,
+        if (agent) {
+          // agent found
+          // find active workspace for agent
+          const session = await this.redisService.get_session(
+            agent.id,
+            client.user.session_id,
           );
-          // session found
-          if (session.active_workspace) {
-            // found a workspace
-            // find conversations by workspace
-            const work_space = await this.workspace_repository.get_by_id(
-              session.active_workspace,
-            );
 
-            let results = [];
-            const resultFilter: { [key: string]: any } = {
+          if (session) {
+            const countFilter: { [key: string]: any } = {
               workspace: new mongoose.Types.ObjectId(session.active_workspace),
-              status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
+              status: data.status ?? CONVERSATION_STATUS.OPEN,
               channel: data.channel ?? CONVERSATION_CHANNEL.CHAT,
             };
 
-            const resultOptions = {
-              skip,
-              limit: data.size,
-            };
-
-            const resultSort = { updatedAt: data.sort ?? -1 };
-
             if (data.contactId) {
-              resultFilter.lead = new mongoose.Types.ObjectId(data.contactId);
+              countFilter.lead = new mongoose.Types.ObjectId(data.contactId);
             }
 
-            const result = await this.conversations_repository.get_all(
-              resultFilter,
-              resultOptions,
-              resultSort,
+            const count = await this.conversations_repository.get_count(
+              countFilter,
             );
+            // session found
+            if (session.active_workspace) {
+              // found a workspace
+              // find conversations by workspace
+              const work_space = await this.workspace_repository.get_by_id(
+                session.active_workspace,
+              );
 
-            if (result.length > 0) {
-              results = result;
-            } else {
-              // try getting old shape
-              // check old conversations exists
+              let results = [];
+              const resultFilter: { [key: string]: any } = {
+                workspace: new mongoose.Types.ObjectId(session.active_workspace),
+                status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
+                channel: data.channel ?? CONVERSATION_CHANNEL.CHAT,
+              };
 
-              const old_con_exists =
-                await this.conversations_repository.check_exists({
-                  root_account: work_space.created_by._id,
-                });
+              const resultOptions = {
+                skip,
+                limit: data.size,
+              };
 
-              if (old_con_exists) {
-                // update old data
+              const resultSort = { updatedAt: data.sort ?? -1 };
 
-                await this.conversations_repository.update_many(
-                  { root_account: work_space.created_by._id },
-                  {
-                    $set: {
-                      workspace: work_space._id,
+              if (data.contactId) {
+                resultFilter.lead = new mongoose.Types.ObjectId(data.contactId);
+              }
+
+              const result = await this.conversations_repository.get_all(
+                resultFilter,
+                resultOptions,
+                resultSort,
+              );
+
+              if (result.length > 0) {
+                results = result;
+              } else {
+                // try getting old shape
+                // check old conversations exists
+
+                const old_con_exists =
+                  await this.conversations_repository.check_exists({
+                    root_account: work_space.created_by._id,
+                  });
+
+                if (old_con_exists) {
+                  // update old data
+
+                  await this.conversations_repository.update_many(
+                    { root_account: work_space.created_by._id },
+                    {
+                      $set: {
+                        workspace: work_space._id,
+                      },
+                      $unset: { root_account: 1 },
                     },
-                    $unset: { root_account: 1 },
-                  },
-                );
-                const oldConversationsFilter = {
-                  workspace: new mongoose.Types.ObjectId(
-                    session.active_workspace,
-                  ),
-                  status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
-                  channel: data.channel ?? CONVERSATION_CHANNEL.CHAT,
-                };
+                  );
+                  const oldConversationsFilter = {
+                    workspace: new mongoose.Types.ObjectId(
+                      session.active_workspace,
+                    ),
+                    status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
+                    channel: data.channel ?? CONVERSATION_CHANNEL.CHAT,
+                  };
 
-                const oldConversationsOptions = {
-                  skip,
-                  limit: data.size,
-                };
+                  const oldConversationsOptions = {
+                    skip,
+                    limit: data.size,
+                  };
 
-                const oldConversationsSort = { updatedAt: data.sort ?? -1 };
+                  const oldConversationsSort = { updatedAt: data.sort ?? -1 };
 
-                if (data.contactId) {
-                  resultFilter.lead = new mongoose.Types.ObjectId(
-                    data.contactId,
+                  if (data.contactId) {
+                    resultFilter.lead = new mongoose.Types.ObjectId(
+                      data.contactId,
+                    );
+                  }
+
+                  results = await this.conversations_repository.get_all(
+                    oldConversationsFilter,
+                    oldConversationsOptions,
+                    oldConversationsSort,
                   );
                 }
-
-                results = await this.conversations_repository.get_all(
-                  oldConversationsFilter,
-                  oldConversationsOptions,
-                  oldConversationsSort,
-                );
               }
+
+              return {
+                data: {
+                  conversations: results,
+                  error: null,
+                  page: data.page,
+                  count,
+                },
+              };
+            } else {
+              return {
+                data: { conversations: [], page: data.page, count },
+                error: { msg: 'no active workspace found', status: 404 },
+              };
             }
+          } else {
+            // session not found
 
             return {
-              data: {
-                conversations: results,
-                error: null,
-                page: data.page,
-                count,
-              },
-            };
-          } else {
-            return {
-              data: { conversations: [], page: data.page, count },
-              error: { msg: 'no active workspace found', status: 404 },
+              data: { conversations: [], count: 0, page: data.page },
+              error: { msg: 'could not find session', status: 404 },
             };
           }
         } else {
-          // session not found
-
           return {
             data: { conversations: [], count: 0, page: data.page },
-            error: { msg: 'could not find session', status: 404 },
+            error: { msg: 'could not find associated agent', status: 404 },
           };
         }
-      } else {
-        return {
-          data: { conversations: [], count: 0, page: data.page },
-          error: { msg: 'could not find associated agent', status: 404 },
-        };
       }
-    }
+    } catch (err) { }
   }
 
   async get_contact_conversations(
@@ -1067,13 +1191,13 @@ export class ChatService {
     const checkedChannel =
       data.conversation_channel === CONVERSATION_CHANNEL.CHAT
         ? {
-            $nin: [
-              CONVERSATION_CHANNEL.SMS,
-              CONVERSATION_CHANNEL.EMAIL,
-              CONVERSATION_CHANNEL.WHATSAPP,
-              CONVERSATION_CHANNEL.MESSENGER,
-            ],
-          }
+          $nin: [
+            CONVERSATION_CHANNEL.SMS,
+            CONVERSATION_CHANNEL.EMAIL,
+            CONVERSATION_CHANNEL.WHATSAPP,
+            CONVERSATION_CHANNEL.MESSENGER,
+          ],
+        }
         : data.conversation_channel;
 
     const result = await this.conversations_repository.get_all({
@@ -1236,8 +1360,8 @@ export class ChatService {
   ) {
     let workspace = data?.workspace_id
       ? await this.workspace_repository.get_one({
-          _id: data?.workspace_id,
-        })
+        _id: data?.workspace_id,
+      })
       : null;
 
     if (!workspace) {
@@ -1368,7 +1492,12 @@ export class ChatService {
         conversation: new mongoose.Types.ObjectId(data.conversation_id),
         sender: new mongoose.Types.ObjectId(client.user.user_id),
       });
+
+      const final = await this.messages_repository.get_by_id(new_message.id);
+      const sender = await this.user_repository.get_by_id(client.user.user_id);
+
       if (new_message.type === MESSAGE_TYPE.SWITCH_TO_AGENT) {
+        Logger.log('Reassigning');
         // switch over client here
         await this.conversations_repository.update_one(
           { _id: new mongoose.Types.ObjectId(data.conversation_id) },
@@ -1376,9 +1505,86 @@ export class ChatService {
             assigned_to: [],
           },
         );
+
+        const widget_config = await this.widget_config_repository.get_by_id(client.user.widget_id);
+
+        Logger.log('Sender Email:', sender.email);
+        Logger.log('Widget Config:', widget_config);
+        Logger.log('Email Required:', widget_config.email_required);
+
+        const duringWorkingHours = getIsWorking(widget_config.email_required, widget_config.availability);
+
+        if (!sender.email && (widget_config.email_required == EMAIL_REQUIRED_STATUS.ALWAYS || duringWorkingHours)) {
+          Logger.log('Send prompt');
+
+          const sparky =
+            (await this.user_repository.get_by_id(
+              ((final.conversation as Conversations)?.workspace as WorkSpaces)?.spark_gpt_agent?._id,
+            )) ??
+            (await this.authService.create_spark_gpt_agent(
+              (final.conversation as Conversations)?.workspace as WorkSpaces,
+            ));
+
+          const cta_pre_message = await this.messages_repository.create({
+            sender: sparky._id,
+            conversation: final.conversation,
+            content: {
+              text: 'In the meantime, could you tell us more about you please?',
+            },
+            type: MESSAGE_TYPE.TEXT,
+            workspace: (final.conversation as Conversations)?.workspace
+          });
+          const prompt_message = await this.messages_repository.create({
+            sender,
+            conversation: final.conversation,
+            content: {
+              text: '',
+              payload: {
+                prompt_type: PROMPT_TYPE.EMAIL,
+                title: "Email",
+              },
+            },
+            type: MESSAGE_TYPE.PROMPT,
+            workspace: (final.conversation as Conversations)?.workspace
+          });
+
+          const conversation = await this.conversations_repository.update_one(
+            { _id: new mongoose.Types.ObjectId(data.conversation_id) },
+            {
+              last_message: prompt_message._id,
+            },
+          );
+
+          client
+            .to((conversation.workspace as WorkSpaces).id)
+            .emit('new_message', { data: prompt_message });
+
+          client.emit('new_message', { data: cta_pre_message });
+          client.emit('new_message', { data: prompt_message });
+        } else {
+          const sparky =
+            (await this.user_repository.get_by_id(
+              ((final.conversation as Conversations)?.workspace as WorkSpaces)?.spark_gpt_agent?._id,
+            )) ??
+            (await this.authService.create_spark_gpt_agent(
+              (final.conversation as Conversations)?.workspace as WorkSpaces,
+            ));
+
+          const cta_pre_message = await this.messages_repository.create({
+            sender: sparky._id,
+            conversation: final.conversation,
+            content: {
+              text: 'An agent will reply shortly.',
+            },
+            type: MESSAGE_TYPE.TEXT,
+            workspace: (final.conversation as Conversations)?.workspace
+          });
+
+          client.emit('new_message', {
+            data: cta_pre_message,
+          })
+        }
       }
-      const final = await this.messages_repository.get_by_id(new_message.id);
-      const sender = await this.user_repository.get_by_id(client.user.user_id);
       const current_conversation =
         await this.conversations_repository.update_one(
           { _id: new mongoose.Types.ObjectId(data.conversation_id) },
@@ -1505,8 +1711,8 @@ export class ChatService {
           const lead = (initial_conversation?.lead as Users)?.id
             ? (initial_conversation?.lead as Users)
             : await this.user_repository.get_by_id(
-                initial_conversation?.lead as string,
-              );
+              initial_conversation?.lead as string,
+            );
 
           const sendSmsEventData = {
             event_name: 'send_sms',
@@ -1525,12 +1731,12 @@ export class ChatService {
           if (smsSendingResult.rejected.length > 0) {
             this.error_handling_service.emitErrorEventToDashboard(
               data.workspace_id ??
-                (initial_conversation.workspace as WorkSpaces)?.id ??
-                initial_conversation.workspace,
+              (initial_conversation.workspace as WorkSpaces)?.id ??
+              initial_conversation.workspace,
               ERROR_MESSAGES.SMS_FAILED_FOR +
-                smsSendingResult.rejected
-                  .map((rejected) => rejected.to)
-                  .join(', '),
+              smsSendingResult.rejected
+                .map((rejected) => rejected.to)
+                .join(', '),
             );
           }
 
@@ -1685,9 +1891,8 @@ export class ChatService {
           ]);
 
           info_message_result = await this.messages_repository.create({
-            'content.text': `${
-              (final.sender as Users).user_name
-            } assigned themselves to this conversation`,
+            'content.text': `${(final.sender as Users).user_name
+              } assigned themselves to this conversation`,
             type: MESSAGE_TYPE.INFO,
             conversation: data.conversation_id,
             sender: new mongoose.Types.ObjectId(client.user.sub),
@@ -1711,9 +1916,8 @@ export class ChatService {
             ),
           ]);
           info_message_result = await this.messages_repository.create({
-            'content.text': `${
-              (final.sender as Users).user_name
-            } assigned themselves to this conversation`,
+            'content.text': `${(final.sender as Users).user_name
+              } assigned themselves to this conversation`,
             type: MESSAGE_TYPE.INFO,
             conversation: data.conversation_id,
             sender: new mongoose.Types.ObjectId(client.user.sub),
@@ -1733,9 +1937,8 @@ export class ChatService {
           ]);
 
           info_message_result = await this.messages_repository.create({
-            'content.text': `${
-              (final.sender as Users).user_name
-            } assigned themselves to this conversation`,
+            'content.text': `${(final.sender as Users).user_name
+              } assigned themselves to this conversation`,
             type: MESSAGE_TYPE.INFO,
             conversation: data.conversation_id,
             sender: new mongoose.Types.ObjectId(client.user.sub),

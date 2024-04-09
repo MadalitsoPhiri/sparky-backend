@@ -1,4 +1,4 @@
-import { UseGuards } from '@nestjs/common';
+import { Logger, UseGuards } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -34,6 +34,7 @@ import { TypingStatusDto } from './entities/dtos/typing_status.dto';
 import { UpdateFaqDto } from './entities/dtos/update_faq.dto';
 import { UpdateLeadNotesDto } from './entities/dtos/update_lead_notes.dto';
 import { UpdateUserInfoDto } from './entities/dtos/update_user_info.dto';
+import { UpdateUserEmailDto } from './entities/dtos/update_user_email.dto';
 
 @WebSocketGateway()
 export class ChatGateWay {
@@ -202,7 +203,19 @@ export class ChatGateWay {
     @ConnectedSocket() client: SocketType,
     @MessageBody() data: EventDto<UpdateUserInfoDto>,
   ) {
+    Logger.log('Data:', data);
+
     return this.chatService.handle_update_lead_info(client, data);
+  }
+  @UseGuards(SocketAuthGuard)
+  @SubscribeMessage('update_user_email')
+  async handle_update_user_email(
+    @ConnectedSocket() client: SocketType,
+    @MessageBody() data: EventDto<UpdateUserEmailDto>,
+  ) {
+    Logger.log('Data:', data);
+    
+    return this.chatService.handle_update_lead_email(client, data);
   }
 
   @UseGuards(SocketAuthGuard)

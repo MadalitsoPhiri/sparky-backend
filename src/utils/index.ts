@@ -5,7 +5,8 @@ import { convert } from 'html-to-text';
 import { ScraperDto } from 'src/spark-gpt/entities/dtos/scrapper_dto';
 import { Conversations, Messages } from 'src/chat/entities/schema';
 import { channel } from 'diagnostics_channel';
-import { CONVERSATION_CHANNEL } from 'src/chat/entities/constants';
+import { CONVERSATION_CHANNEL, EMAIL_REQUIRED_STATUS } from 'src/chat/entities/constants';
+import { Availability } from 'src/auth/entities';
 
 export const getHTMLFromWebsite = async (dto: ScraperDto) => {
   const pattern = /^((http|https|ftp):\/\/)/;
@@ -116,3 +117,33 @@ export const convertThreadToConversation = async (thread: any) => {
     return new Conversations({ channel: CONVERSATION_CHANNEL.EMAIL });
   }
 };
+
+export const getIsWorking = (email_required: string, availability: Availability) => {
+  // FIXME: remove this code and let the rest run
+  return false;
+  
+  if (email_required != EMAIL_REQUIRED_STATUS.OFFICE_HOURS) {
+    return;
+  }
+
+  let available = false;
+
+  const now = new Date();
+
+  const currentDayInWeek = now.toLocaleString("en-US", {
+    // timeZone: localTimeZone,
+    weekday: 'long'
+  });
+  const currentTime = new Intl.DateTimeFormat([], {
+    // timeZone: localTimeZone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(now);
+
+  const workingTimes = availability.officeHours.filter(times => times.openDay?.toLocaleLowerCase() === currentDayInWeek?.toLocaleLowerCase());
+
+  return workingTimes.some((time) => {
+    if (currentTime >= time.openTime && currentTime <= time.closeTime) return true;
+  });
+}
