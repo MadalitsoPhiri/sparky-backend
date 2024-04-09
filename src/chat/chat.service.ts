@@ -965,8 +965,6 @@ export class ChatService {
       if (client && client.user.type == USERTYPE.CLIENT) {
         // get conversations for widget here
 
-        console.log('client user:', client.user.user_id);
-
         const count = await this.conversations_repository.get_count({
           lead: client.user.user_id,
           status: data.status ? data.status : CONVERSATION_STATUS.OPEN,
