@@ -6,36 +6,29 @@ import { ScraperDto } from 'src/spark-gpt/entities/dtos/scrapper_dto';
 import { Conversations, Messages } from 'src/chat/entities/schema';
 import { channel } from 'diagnostics_channel';
 import { CONVERSATION_CHANNEL } from 'src/chat/entities/constants';
+import puppeteer from 'puppeteer';
 
-export const getHTMLFromWebsite = async (dto: ScraperDto) => {
-  const pattern = /^((http|https|ftp):\/\/)/;
-  let final_url = dto.url;
-  if (!pattern.test(dto.url)) {
-    final_url = 'https://' + dto.url;
-  }
-  const httpsAgent = new https.Agent({ keepAlive: true });
-  try {
-    const { data: html } = await axios.get(final_url, {
-      httpsAgent,
-      params: {
-        cat_id: '876',
-      },
-      headers: {
-        'Accept-Encoding': 'gzip, deflate, br',
-      },
-    });
+export const getHTMLFromWebsite = async ({ url }: ScraperDto) => {
+  // TODO: maybe using Crawlee for proper crawling
+  //initiate the browser 
+  const browser = await puppeteer.launch();
 
-    httpsAgent.destroy();
+  //create a new in headless chrome 
+  const page = await browser.newPage();
 
-    return html as string;
-  } catch (e: any) {
-    httpsAgent.destroy();
+  //go to target website 
+  await page.goto(url, {
+    //wait for content to load 
+    waitUntil: 'networkidle0',
+  });
 
-    throw new HttpException(
-      'failed to get html please check url',
-      HttpStatus.INTERNAL_SERVER_ERROR,
-    );
-  }
+  //get full page html 
+  const html = await page.content();
+
+  //close headless chrome 
+  await browser.close();
+
+  return html;
 };
 
 export const extractTextFromHTML = (html: string) => {
@@ -116,3 +109,7 @@ export const convertThreadToConversation = async (thread: any) => {
     return new Conversations({ channel: CONVERSATION_CHANNEL.EMAIL });
   }
 };
+
+export const getGoogleDocIdFromUrl = (url: string) => {
+  return url.match(/[-\w]{25,}/)?.[0];
+}

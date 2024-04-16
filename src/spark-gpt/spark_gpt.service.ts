@@ -7,7 +7,7 @@ import { CompanyContextRepository } from './repositories/company_context.reposit
 import { BasicSparkGPTQuestion, SparkGPTQuestion } from './entities/schema';
 import { CreateCompletionDto } from './entities/dtos/create_completion.dto';
 import { BASIC_COMPANY_INFORMATION_QUESTION } from './entities/constants';
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { WorkspaceRepository } from 'src/auth/repositories';
 import { ScraperDto } from './entities/dtos/scrapper_dto';
 import { RedisService } from 'src/redis/redis.service';
@@ -18,8 +18,9 @@ import { convert } from 'html-to-text';
 import mongoose from 'mongoose';
 import * as https from 'https';
 import axios from 'axios';
-import { extractTextFromHTML, getHTMLFromWebsite } from 'src/utils';
+import { extractTextFromHTML, getGoogleDocIdFromUrl, getHTMLFromWebsite } from 'src/utils';
 import { FaqsRespository } from 'src/chat/repositories/faq.respository';
+import { google } from 'googleapis'
 
 const ERRORS = {
   // use a file for this and handle with try-catch (?)
@@ -162,6 +163,34 @@ export class SparkGPTService {
     }
   }
 
+  private async update_company_context_from_google_docs(
+    workspace: mongoose.Types.ObjectId,
+    text: string,
+    url: string,
+  ) {
+    const company_data = await this.get_company_data_by_doc_text(text);
+    const website_context_data = company_data.context;
+    const current_company_context =
+      await this.company_context_repository.get_one({ workspace });
+
+    if (current_company_context) {
+      return this.company_context_repository.update_one(
+        { workspace },
+        {
+          workspace,
+          value: website_context_data,
+          google_docs_url: url,
+        },
+      );
+    } else {
+      return this.company_context_repository.create({
+        workspace,
+        value: website_context_data,
+        google_docs_url: url,
+      });
+    }
+  }
+
   async verify_and_update_company_context(
     client: SocketType,
     workspace: mongoose.Types.ObjectId,
@@ -205,8 +234,65 @@ export class SparkGPTService {
         );
       }
       return { context };
-    } catch (e: any) {}
+    } catch (e: any) { }
   }
+
+  async import_google_docs(client: SocketType, url: string) {
+    const session = await this.redisService.get_session(
+      client.user.sub,
+      client.user.session_id,
+    );
+    const workspace = new mongoose.Types.ObjectId(session.active_workspace);
+
+    return new Promise(async (resolve, reject) => {
+      try {
+        let context;
+
+        if (url != '') {
+          // Get ref to drive api
+          const drive = google.drive({
+            version: 'v3',
+          });
+
+          // Get file id
+          const file_id = getGoogleDocIdFromUrl(url);
+
+          // Get file
+          const file = await drive.files.export({
+            fileId: file_id,
+            mimeType: 'text/plain',
+            key: process.env.GOOGLE_CLOUD_API_KEY,
+          });
+
+          const file_contents = file.data as string;
+
+          context = this.update_company_context_from_google_docs(workspace, file_contents, url);
+        } else {
+          await this.company_context_repository.update_one(
+            {
+              workspace: new mongoose.Types.ObjectId(session.active_workspace),
+            },
+            { google_docs_url: '' },
+          );
+          context = await this.verify_and_update_company_context(
+            client,
+            new mongoose.Types.ObjectId(session.active_workspace),
+          );
+        }
+
+        resolve({ context });
+      } catch (err) {
+        Logger.error('error:', err);
+
+        reject({
+          error: true,
+          message: 'Check the URL',
+          status: 500,
+        })
+      }
+    })
+  }
+
   async get_context(client: SocketType) {
     const session = await this.redisService.get_session(
       client.user.sub,
@@ -226,11 +312,24 @@ export class SparkGPTService {
     const rawData = extractTextFromHTML(rawHTML);
     console.log('rawData', rawData.text);
     const companyData: any =
-      await gptGatewayAPIClient.get_context_from_raw_data_text(rawData.text);
+      await this.create_new_company_context(rawData.text);
 
     return {
       context: companyData.company_context,
     };
+  }
+
+  async get_company_data_by_doc_text(text: string) {
+    const companyData: any =
+      await this.create_new_company_context(text);
+
+    return {
+      context: companyData.company_context,
+    };
+  }
+
+  async create_new_company_context(text: string) {
+    return await gptGatewayAPIClient.get_context_from_raw_data_text(text);
   }
 
   async create_spark_gpt_question(

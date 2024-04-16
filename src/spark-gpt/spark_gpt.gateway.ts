@@ -54,6 +54,17 @@ export class SparkGPTGateWay {
     );
   }
 
+  @SubscribeMessage('import_google_doc')
+  async handleImportGoogleDoc(
+    @ConnectedSocket() client: SocketType,
+    @MessageBody() data: EventDto<WebSiteImportDto>,
+  ) {
+    return await this.sparkGPTService.import_google_docs(
+      client,
+      data.payload.url,
+    );
+  }
+
   @SubscribeMessage('get_context')
   async handleGetCompanyContext(@ConnectedSocket() client: SocketType) {
     return await this.sparkGPTService.get_context(client);
